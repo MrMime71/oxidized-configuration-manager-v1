@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # Installation script for Oxidized Configuration Manager
-# This script sets up the Flask app on Ubuntu, checks for dependencies, creates a virtual environment,
-# installs required Python modules, configures the app with user-provided paths and credentials,
+# Sets up the Flask app on Ubuntu, checks dependencies, creates a virtual environment,
+# installs Python modules, configures the app with user-provided paths and credentials,
 # sets up a systemd service, and configures the firewall for port 5000.
-# It also checks if Oxidized is installed and running.
+# Includes backup functionality for raw config and router.db saves.
 # Run as root or with sudo.
 
 # Exit on error
@@ -94,6 +94,17 @@ if [ -z "$auth_password" ]; then
   error "Basic auth password cannot be empty."
 fi
 
+# Validate variable substitution
+info "Verifying input values..."
+echo "App directory: $app_dir"
+echo "Config path: $config_path"
+echo "Router DB path: $router_db_path"
+echo "Auth username: $auth_username"
+echo "Auth password: [hidden for security]"
+if [[ "$config_path" == *"\$config_path"* || "$router_db_path" == *"\$router_db_path"* || "$auth_username" == *"\$auth_username"* || "$auth_password" == *"\$auth_password"* ]]; then
+  error "Variable substitution failed. Please check script execution environment."
+fi
+
 # Create virtual environment
 info "Creating virtual environment..."
 python3 -m venv "$app_dir/venv"
@@ -114,7 +125,7 @@ Features:
 - Edit config (username, password, interval, groups) with read-only prompt regex (toggleable).
 - Editable group names in config, displayed in a three-column layout.
 - Edit router.db (devices) with static model dropdown, group dropdown (restricted to defined groups, 1.5x wider column), and doubled-width input fields.
-- Raw editors for config (YAML) and router.db (CSV).
+- Raw editors for config (YAML) and router.db (CSV) with automatic backups.
 - Button to restart the Oxidized service with sudo password input.
 - Blue color scheme with Tailwind CSS.
 - Basic auth for security.
@@ -122,6 +133,8 @@ Features:
 
 import csv
 import os
+import shutil
+from datetime import datetime
 import subprocess
 from functools import wraps
 
@@ -137,15 +150,12 @@ ROUTER_DB_PATH = "$router_db_path"
 AUTH_USERNAME = "$auth_username"
 AUTH_PASSWORD = "$auth_password"
 
-
 # YAML Custom Constructor
 def ruby_regexp_constructor(loader, node):
     """Handle !ruby/regexp tags by returning the regex as a string."""
     return loader.construct_scalar(node)
 
-
 yaml.SafeLoader.add_constructor("!ruby/regexp", ruby_regexp_constructor)
-
 
 # File Handling Functions
 def read_yaml_config():
@@ -159,7 +169,6 @@ def read_yaml_config():
     except yaml.YAMLError as e:
         flash(f"Error parsing config file: {e}")
         return {}
-
 
 def write_yaml_config(config):
     """Write the config to the YAML file, preserving !ruby/regexp tags."""
@@ -180,7 +189,6 @@ def write_yaml_config(config):
     except Exception as e:
         flash(f"Error saving config: {e}")
         return False
-
 
 def read_router_db():
     """Read and parse the router.db CSV file."""
@@ -206,7 +214,6 @@ def read_router_db():
         flash(f"Error reading router.db: {e}")
     return devices
 
-
 def write_router_db(devices):
     """Write devices to the router.db CSV file."""
     try:
@@ -229,7 +236,6 @@ def write_router_db(devices):
         flash(f"Error saving router.db: {e}")
         return False
 
-
 def read_raw_file(file_path):
     """Read raw content of a file."""
     try:
@@ -239,11 +245,20 @@ def read_raw_file(file_path):
         flash(f"Error reading file {file_path}: {e}")
         return ""
 
-
 def write_raw_config(content):
-    """Write raw content to config file after validating YAML."""
+    """Write raw content to config file after validating YAML and creating a backup."""
     try:
-        yaml.safe_load(content)  # Validate YAML
+        # Validate YAML
+        yaml.safe_load(content)
+
+        # Create backup if file exists
+        if os.path.exists(CONFIG_PATH):
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = f"{CONFIG_PATH}.{timestamp}.bak"
+            shutil.copy2(CONFIG_PATH, backup_path)
+            flash(f"Backup created: {backup_path}")
+
+        # Write content
         with open(CONFIG_PATH, "w") as file:
             file.write(content)
         return True
@@ -254,16 +269,25 @@ def write_raw_config(content):
         flash(f"Error saving config: {e}")
         return False
 
-
 def write_raw_router_db(content):
-    """Write raw content to router.db after basic CSV validation."""
+    """Write raw content to router.db after basic CSV validation and creating a backup."""
     try:
+        # Validate CSV
         lines = content.strip().split("\n")
         for line in lines:
             if line.strip() and len(line.split(":")) < 6:
                 raise ValueError(
                     "Each line must have at least 6 fields (name:ip:model:username:password:group[:enable])"
                 )
+
+        # Create backup if file exists
+        if os.path.exists(ROUTER_DB_PATH):
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = f"{ROUTER_DB_PATH}.{timestamp}.bak"
+            shutil.copy2(ROUTER_DB_PATH, backup_path)
+            flash(f"Backup created: {backup_path}")
+
+        # Write content
         with open(ROUTER_DB_PATH, "w") as file:
             file.write(content)
         return True
@@ -271,19 +295,16 @@ def write_raw_router_db(content):
         flash(f"Error saving router.db: {e}")
         return False
 
-
 # Authentication
 def check_auth(username, password):
     """Verify basic auth credentials."""
     return username == AUTH_USERNAME and password == AUTH_PASSWORD
-
 
 def authenticate():
     """Return a 401 response for authentication."""
     return Response(
         "Login required", 401, {"WWW-Authenticate": 'Basic realm="Login Required"'}
     )
-
 
 def requires_auth(f):
     """Decorator to enforce basic auth."""
@@ -294,7 +315,6 @@ def requires_auth(f):
             return authenticate()
         return f(*args, **kwargs)
     return decorated
-
 
 # HTML Template
 HTML_TEMPLATE = """
@@ -570,7 +590,6 @@ HTML_TEMPLATE = """
 </html>
 """
 
-
 # Routes
 @app.route("/")
 @requires_auth
@@ -587,7 +606,6 @@ def index():
         raw_config=raw_config,
         raw_router_db=raw_router_db,
     )
-
 
 @app.route("/save_config", methods=["POST"])
 @requires_auth
@@ -621,7 +639,6 @@ def save_config():
     if write_yaml_config(config):
         flash("Config saved successfully!")
     return redirect(url_for("index"))
-
 
 @app.route("/save_router_db", methods=["POST"])
 @requires_auth
@@ -661,7 +678,6 @@ def save_router_db():
         flash("router.db saved successfully!")
     return redirect(url_for("index"))
 
-
 @app.route("/delete_device/<int:index>")
 @requires_auth
 def delete_device(index):
@@ -675,7 +691,6 @@ def delete_device(index):
         flash("Invalid device index.")
     return redirect(url_for("index"))
 
-
 @app.route("/save_raw_config", methods=["POST"])
 @requires_auth
 def save_raw_config():
@@ -685,7 +700,6 @@ def save_raw_config():
         flash("Raw config saved successfully!")
     return redirect(url_for("index"))
 
-
 @app.route("/save_raw_router_db", methods=["POST"])
 @requires_auth
 def save_raw_router_db():
@@ -694,7 +708,6 @@ def save_raw_router_db():
     if write_raw_router_db(raw_content):
         flash("Raw router.db saved successfully!")
     return redirect(url_for("index"))
-
 
 @app.route("/restart_oxidized", methods=["POST"])
 @requires_auth
@@ -721,10 +734,16 @@ def restart_oxidized():
         flash(f"Unexpected error restarting Oxidized: {str(e)}")
     return redirect(url_for("index"))
 
-
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
 EOF
+
+# Verify script content
+info "Verifying generated script..."
+if grep -q "\$auth_username" "$app_dir/oxidized_config_manager.py"; then
+  error "Variable substitution failed in $app_dir/oxidized_config_manager.py. Check script for placeholders."
+fi
+info "Generated script looks good."
 
 # Set permissions for app directory and files
 chown -R $(whoami):$(whoami) "$app_dir"
