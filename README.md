@@ -3,21 +3,36 @@ It installs on the same server as oxidized 0.34.3 (Ubuntu 24.02) and runs on por
 
 My config file is not standard as i have IP and Hostname seperate:
 source:
+
   default: csv
+  
   csv:
+  
     file: "/home/pal/.config/oxidized/router.db"
+    
     delimiter: !ruby/regexp /:/
+    
     map:
+    
       ip: 1
+      
       name: 0
+      
       model: 2
+      
       username: 3
+      
       password: 4
+      
       group: 5
+      
     vars_map:
+    
       enable: 6
+      
 
 and the following setup in router.db
+
 Utility1:192.168.10.10:ios:username:password:Cisco9200L:enablepassword
 
 <img width="1339" height="1073" alt="Website1" src="https://github.com/user-attachments/assets/b0ba5b72-7168-42c7-ae41-ce892ba57e24" />
