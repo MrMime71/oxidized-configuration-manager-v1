@@ -1,17 +1,14 @@
 #!/bin/bash
 
 # Installation script for Oxidized Configuration Manager
-# Compatible with Ubuntu 22.04 and 24.04
 # Runs as a normal user (e.g., pal) with sudo for privileged operations.
-# Sets up a Flask app to manage Oxidized config and router.db files, creates a virtual environment,
+# Sets up the Flask app on Ubuntu 22.04, creates a virtual environment,
 # installs Python modules, configures the app with user-provided paths and credentials,
 # sets up a systemd service, and configures the firewall for port 5000.
-# Features: three-column group layout, w-48 min-w-[12rem] Group column, doubled-width fields,
-# static model <datalist>, group <select>, editable groups, sudo -S for Oxidized restart,
-# blue color scheme, raw editors with backups.
+# Includes backup functionality for raw config and router.db saves.
 # Uses $HOME for correct home directory (e.g., /home/pal).
 # Prompts for sudo password once and caches it.
-# Fixes permission issues and verifies port 5000 listener.
+# Verifies port 5000 listener.
 
 # Colors for output
 RED='\033[0;31m'
@@ -56,8 +53,8 @@ echo "$SUDO_PASSWORD" | sudo -S true 2>/dev/null || error "Invalid sudo password
 UBUNTU_VERSION=$(lsb_release -rs)
 info "Detected Ubuntu version: $UBUNTU_VERSION"
 
-if [[ $UBUNTU_VERSION != "22.04" && $UBUNTU_VERSION != "24.04" ]]; then
-  warn "This script is tested for Ubuntu 22.04 and 24.04. Detected version: $UBUNTU_VERSION. Proceed with caution."
+if [[ $UBUNTU_VERSION != "22.04" ]]; then
+  warn "This script is tested for Ubuntu 22.04. Detected version: $UBUNTU_VERSION. Proceed with caution."
   read -p "Continue? (y/n): " continue_choice
   if [[ $continue_choice != "y" ]]; then
     exit 0
@@ -77,62 +74,10 @@ if [[ $PYTHON_MAJOR -lt 3 || $PYTHON_MINOR -lt 8 ]]; then
 fi
 info "Python version: $PYTHON_VERSION"
 
-# Check and install python3-venv
-info "Checking python3-venv..."
-if ! dpkg -l | grep -q python3-venv; then
-  info "Installing python3-venv..."
-  echo "$SUDO_PASSWORD" | sudo -S apt update
-  echo "$SUDO_PASSWORD" | sudo -S apt install -y python3-venv
-fi
-
-# Check and install python3-pip
-info "Checking python3-pip..."
-if ! dpkg -l | grep -q python3-pip; then
-  info "Installing python3-pip..."
-  echo "$SUDO_PASSWORD" | sudo -S apt install -y python3-pip
-fi
-
-# Check and install gunicorn
-info "Checking gunicorn..."
-if ! dpkg -l | grep -q python3-gunicorn; then
-  info "Installing python3-gunicorn..."
-  echo "$SUDO_PASSWORD" | sudo -S apt install -y python3-gunicorn
-fi
-
-# Check and fix permissions for home and app directory
-info "Checking permissions for $HOME..."
-if [ "$(stat -c %U:%G "$HOME")" != "$(whoami):$(whoami)" ]; then
-  info "Fixing ownership of $HOME..."
-  echo "$SUDO_PASSWORD" | sudo -S chown "$(whoami):$(whoami)" "$HOME"
-fi
-if [ "$(stat -c %a "$HOME")" != "755" ]; then
-  info "Fixing permissions of $HOME..."
-  echo "$SUDO_PASSWORD" | sudo -S chmod 755 "$HOME"
-fi
-
-info "Checking permissions for $HOME/oxidized_manager..."
-if [ -d "$HOME/oxidized_manager" ]; then
-  if [ "$(stat -c %U:%G "$HOME/oxidized_manager")" != "$(whoami):$(whoami)" ]; then
-    info "Fixing ownership of $HOME/oxidized_manager..."
-    echo "$SUDO_PASSWORD" | sudo -S chown -R "$(whoami):$(whoami)" "$HOME/oxidized_manager"
-  fi
-  if [ "$(stat -c %a "$HOME/oxidized_manager")" != "755" ]; then
-    info "Fixing permissions of $HOME/oxidized_manager..."
-    echo "$SUDO_PASSWORD" | sudo -S chmod -R 755 "$HOME/oxidized_manager"
-  fi
-fi
-
-# Clean up existing service
-info "Cleaning up any existing oxidized-manager service..."
-echo "$SUDO_PASSWORD" | sudo -S systemctl stop oxidized-manager 2>/dev/null
-echo "$SUDO_PASSWORD" | sudo -S systemctl disable oxidized-manager 2>/dev/null
-echo "$SUDO_PASSWORD" | sudo -S rm -f /etc/systemd/system/oxidized-manager.service
-echo "$SUDO_PASSWORD" | sudo -S systemctl daemon-reload
-
 # Install system dependencies
 info "Installing system dependencies..."
 echo "$SUDO_PASSWORD" | sudo -S apt update
-echo "$SUDO_PASSWORD" | sudo -S apt install -y python3 python3-pip python3-gunicorn ufw
+echo "$SUDO_PASSWORD" | sudo -S apt install -y python3 python3-venv python3-pip gunicorn ufw
 
 # Check if Oxidized is installed
 info "Checking if Oxidized is installed..."
@@ -145,10 +90,8 @@ else
   warn "Oxidized is not installed or not configured as a service."
   read -p "Do you want to install Oxidized? (y/n): " install_oxidized
   if [[ $install_oxidized == "y" ]]; then
-    info "Installing Oxidized dependencies..."
     echo "$SUDO_PASSWORD" | sudo -S apt install -y ruby ruby-dev libsqlite3-dev libssl-dev pkg-config cmake libssh2-1-dev libicu-dev zlib1g-dev libgpgme-dev
-    info "Installing Oxidized via gem..."
-    gem install oxidized oxidized-web oxidized-script --no-document
+    gem install oxidized oxidized-web oxidized-script
     mkdir -p ~/.config/oxidized
     echo "Please configure Oxidized manually in ~/.config/oxidized/config and router.db."
   else
@@ -201,10 +144,6 @@ fi
 
 # Create virtual environment
 info "Creating virtual environment..."
-if [ -d "$app_dir/venv" ]; then
-  info "Removing existing virtual environment..."
-  rm -rf "$app_dir/venv"
-fi
 if ! python3 -m venv "$app_dir/venv"; then
   error "Failed to create virtual environment. Ensure python3-venv is installed and $app_dir is writable."
 fi
@@ -212,7 +151,7 @@ source "$app_dir/venv/bin/activate"
 
 # Install Python modules
 info "Installing Python modules..."
-pip install --no-cache-dir flask pyyaml gunicorn
+pip install flask pyyaml gunicorn
 
 # Generate the Python script
 info "Generating app script..."
@@ -846,7 +785,7 @@ fi
 info "Generated script looks good."
 
 # Set permissions for app directory and files
-chown -R "$(whoami):$(whoami)" "$app_dir" ~/.config/oxidized
+chown -R "$(whoami):$(whoami)" "$app_dir"
 chmod 755 "$app_dir/oxidized_config_manager.py"
 chmod -R 664 "$app_dir/venv"
 mkdir -p "$(dirname "$config_path")"
